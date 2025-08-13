@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // إدارة قاعدة البيانات
   backupDatabase: () => ipcRenderer.invoke('backup-database'),
+  backupDatabaseEnhanced: (options) => ipcRenderer.invoke('backup-database-enhanced', options),
+  chooseBackupPath: () => ipcRenderer.invoke('choose-backup-path'),
+  setupAutoBackup: (schedule, driveCredentials) => ipcRenderer.invoke('setup-auto-backup', schedule, driveCredentials),
+  googleDriveAuth: () => ipcRenderer.invoke('google-drive-auth'),
   restoreDatabase: () => ipcRenderer.invoke('restore-database'),
   repairDatabase: () => ipcRenderer.invoke('repair-database'),
 
