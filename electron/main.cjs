@@ -3,9 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { DatabaseService } = require('./database.cjs');
+const { google } = require('googleapis');
+const cron = require('node-cron');
 
 let mainWindow;
 let isDev;
+let backupSchedule = null;
 
 // تأكد من وجود مجلد البيانات
 const ensureDataDirectory = () => {
@@ -31,6 +34,106 @@ const ensureBackupDirectory = () => {
     fs.mkdirSync(backupDir, { recursive: true });
   }
   return backupDir;
+};
+
+// إعداد Google Drive API
+const setupGoogleDrive = (credentials) => {
+  try {
+    const auth = new google.auth.OAuth2(
+      credentials.client_id,
+      credentials.client_secret,
+      credentials.redirect_uri
+    );
+    
+    if (credentials.refresh_token) {
+      auth.setCredentials({
+        refresh_token: credentials.refresh_token
+      });
+    }
+    
+    return google.drive({ version: 'v3', auth });
+  } catch (error) {
+    console.error('Error setting up Google Drive:', error);
+    return null;
+  }
+};
+
+// رفع ملف إلى Google Drive
+const uploadToGoogleDrive = async (filePath, fileName, drive) => {
+  try {
+    const fileMetadata = {
+      name: fileName,
+      parents: ['1234567890'] // يمكن تخصيص مجلد معين
+    };
+    
+    const media = {
+      mimeType: 'application/octet-stream',
+      body: fs.createReadStream(filePath)
+    };
+    
+    const response = await drive.files.create({
+      resource: fileMetadata,
+      media: media,
+      fields: 'id'
+    });
+    
+    return response.data.id;
+  } catch (error) {
+    console.error('Error uploading to Google Drive:', error);
+    throw error;
+  }
+};
+
+// جدولة النسخ الاحتياطي التلقائي
+const scheduleAutoBackup = (schedule, driveCredentials = null) => {
+  if (backupSchedule) {
+    backupSchedule.stop();
+    backupSchedule = null;
+  }
+  
+  if (schedule && schedule !== 'manual') {
+    let cronPattern;
+    switch (schedule) {
+      case 'daily':
+        cronPattern = '0 2 * * *'; // كل يوم في الساعة 2 صباحاً
+        break;
+      case 'weekly':
+        cronPattern = '0 2 * * 0'; // كل أحد في الساعة 2 صباحاً
+        break;
+      case 'monthly':
+        cronPattern = '0 2 1 * *'; // أول كل شهر في الساعة 2 صباحاً
+        break;
+      default:
+        return;
+    }
+    
+    backupSchedule = cron.schedule(cronPattern, async () => {
+      try {
+        console.log('Starting automatic backup...');
+        const backupDir = ensureBackupDirectory();
+        const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+        const backupPath = path.join(backupDir, `gym-auto-backup-${timestamp}.db`);
+        
+        await DatabaseService.backup(backupPath);
+        
+        // رفع إلى Google Drive إذا كان متاحاً
+        if (driveCredentials) {
+          const drive = setupGoogleDrive(driveCredentials);
+          if (drive) {
+            await uploadToGoogleDrive(backupPath, `gym-auto-backup-${timestamp}.db`, drive);
+            console.log('Backup uploaded to Google Drive successfully');
+          }
+        }
+        
+        console.log('Automatic backup completed successfully');
+      } catch (error) {
+        console.error('Automatic backup failed:', error);
+      }
+    });
+    
+    backupSchedule.start();
+    console.log(`Automatic backup scheduled: ${schedule}`);
+  }
 };
 
 // إعداد قاعدة البيانات للتطبيق المثبت
@@ -560,7 +663,14 @@ ipcMain.handle('debug-login', async (event, username, password) => {
 // User management handlers
 ipcMain.handle('create-user', async (event, userData) => {
   try {
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    // تأكد من تشفير كلمة المرور بشكل صحيح
+    const saltRounds = 12; // زيادة قوة التشفير
+    const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
+    
+    console.log('Creating user with hashed password:', {
+      username: userData.username,
+      hashedLength: hashedPassword.length
+    });
     
     const result = await DatabaseService.run(`
       INSERT INTO users (username, password_hash, full_name, role, gym_id, is_active)
@@ -586,7 +696,9 @@ ipcMain.handle('update-user', async (event, userId, userData) => {
     let result;
     if (userData.password) {
       // Update with new password
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
+      const saltRounds = 12;
+      const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
+      
       result = await DatabaseService.run(`
         UPDATE users
         SET username = ?, password_hash = ?, full_name = ?, role = ?,
@@ -624,7 +736,103 @@ ipcMain.handle('update-user', async (event, userId, userData) => {
   }
 });
 
+// النسخ الاحتياطي المحسن
+ipcMain.handle('backup-database-enhanced', async (event, options = {}) => {
+  try {
+    let backupPath;
+    
+    if (options.customPath) {
+      // استخدام المسار المخصص
+      backupPath = options.customPath;
+    } else {
+      // استخدام المسار الافتراضي
+      const backupDir = ensureBackupDirectory();
+      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+      backupPath = path.join(backupDir, `gym-backup-${timestamp}.db`);
+    }
+    
+    // إنشاء النسخة الاحتياطية
+    await DatabaseService.backup(backupPath);
+    
+    let driveFileId = null;
+    
+    // رفع إلى Google Drive إذا كان مطلوباً
+    if (options.uploadToDrive && options.driveCredentials) {
+      try {
+        const drive = setupGoogleDrive(options.driveCredentials);
+        if (drive) {
+          const fileName = path.basename(backupPath);
+          driveFileId = await uploadToGoogleDrive(backupPath, fileName, drive);
+        }
+      } catch (driveError) {
+        console.error('Google Drive upload failed:', driveError);
+        // لا نفشل العملية كاملة إذا فشل الرفع
+      }
+    }
+    
+    return { 
+      success: true, 
+      path: backupPath,
+      driveFileId: driveFileId
+    };
+  } catch (error) {
+    console.error('Enhanced backup error:', error);
+    return { error: error.message };
+  }
+});
+
+// اختيار مسار النسخ الاحتياطي
+ipcMain.handle('choose-backup-path', async () => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'اختر مكان حفظ النسخة الاحتياطية',
+      defaultPath: `gym-backup-${new Date().toISOString().split('T')[0]}.db`,
+      filters: [
+        { name: 'ملفات قاعدة البيانات', extensions: ['db'] },
+        { name: 'جميع الملفات', extensions: ['*'] }
+      ]
+    });
+    
+    if (result.canceled) {
+      return { canceled: true };
+    }
+    
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    console.error('Choose backup path error:', error);
+    return { error: error.message };
+  }
+});
+
+// إعداد النسخ الاحتياطي التلقائي
+ipcMain.handle('setup-auto-backup', async (event, schedule, driveCredentials = null) => {
+  try {
+    scheduleAutoBackup(schedule, driveCredentials);
+    return { success: true };
+  } catch (error) {
+    console.error('Setup auto backup error:', error);
+    return { error: error.message };
+  }
+});
+
+// Google Drive authentication
+ipcMain.handle('google-drive-auth', async () => {
+  try {
+    // هنا يمكن إضافة منطق المصادقة مع Google Drive
+    // للبساطة، سنعيد رابط المصادقة
+    const authUrl = 'https://accounts.google.com/oauth2/auth?client_id=YOUR_CLIENT_ID&redirect_uri=YOUR_REDIRECT_URI&scope=https://www.googleapis.com/auth/drive.file&response_type=code';
+    
+    return { success: true, authUrl };
+  } catch (error) {
+    console.error('Google Drive auth error:', error);
+    return { error: error.message };
+  }
+});
+
 // إغلاق قاعدة البيانات عند إغلاق التطبيق
 app.on('will-quit', () => {
+  if (backupSchedule) {
+    backupSchedule.stop();
+  }
   DatabaseService.close();
 });

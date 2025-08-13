@@ -419,13 +419,26 @@ close() {
         fs.mkdirSync(backupDir, { recursive: true });
       }
       
-      // إنشاء نسخة احتياطية
-      const backup = this.db.backup(backupPath);
-      
-      backup.step(-1);
-      backup.finish();
-      
-      resolve(backupPath);
+      try {
+        // الحصول على مسار قاعدة البيانات الحالية
+        let currentDbPath;
+        const { app } = require('electron');
+        
+        if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+          currentDbPath = path.join(__dirname, '../data/gym.db');
+        } else {
+          currentDbPath = path.join(app.getPath('userData'), 'data', 'gym.db');
+        }
+        
+        // نسخ الملف مباشرة
+        fs.copyFileSync(currentDbPath, backupPath);
+        
+        console.log(`Backup created successfully: ${backupPath}`);
+        resolve(backupPath);
+      } catch (error) {
+        console.error('Backup error:', error);
+        reject(error);
+      }
     });
   }
 
@@ -440,21 +453,32 @@ close() {
         return;
       }
       
-      // إغلاق الاتصال الحالي
-      this.db.close();
-      
-      // الحصول على مسار قاعدة البيانات الحالية
-      const dbPath = path.join(__dirname, '../data/gym.db');
-      
       try {
+        // الحصول على مسار قاعدة البيانات الحالية
+        let dbPath;
+        const { app } = require('electron');
+        
+        if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+          dbPath = path.join(__dirname, '../data/gym.db');
+        } else {
+          dbPath = path.join(app.getPath('userData'), 'data', 'gym.db');
+        }
+        
+        // إغلاق الاتصال الحالي مؤقتاً
+        if (this.db) {
+          this.db.close();
+        }
+        
         // نسخ ملف النسخة الاحتياطية إلى مسار قاعدة البيانات
         fs.copyFileSync(backupPath, dbPath);
         
-        // إعادة فتح الاتصال
+        // إعادة فتح الاتصال بقاعدة البيانات
         this.db = new sqlite3.Database(dbPath);
         
+        console.log(`Database restored successfully from: ${backupPath}`);
         resolve(true);
       } catch (error) {
+        console.error('Restore error:', error);
         reject(error);
       }
     });

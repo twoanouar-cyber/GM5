@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Settings, Building, Palette, Database, FileText, Upload, Download } from 'lucide-react';
+import { Save, Settings, Building, Palette, Database, FileText, Upload, Download, FolderOpen, Cloud, Clock } from 'lucide-react';
 import { useGym } from '../../contexts/GymContext';
 
 interface GymSettings {
@@ -109,13 +109,15 @@ const SettingsPage: React.FC = () => {
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error' | 'info' | null; message: string | null }>({ type: null, message: null });
   const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [driveConnected, setDriveConnected] = useState(false);
+  const [autoBackupSchedule, setAutoBackupSchedule] = useState('manual');
 
   const createBackup = async () => {
     try {
       setIsBackupLoading(true);
       setBackupStatus({ type: 'info', message: 'جاري إنشاء نسخة احتياطية...' });
 
-      const result = await window.electronAPI.backupDatabase();
+      const result = await window.electronAPI.backupDatabaseEnhanced();
       
       if (result.error) {
         setBackupStatus({ type: 'error', message: `فشل النسخ الاحتياطي: ${result.error}` });
@@ -130,6 +132,125 @@ const SettingsPage: React.FC = () => {
       setBackupStatus({ type: 'error', message: `حدث خطأ غير متوقع: ${error instanceof Error ? error.message : 'Unknown error'}` });
     } finally {
       setIsBackupLoading(false);
+    }
+  };
+
+  const createBackupWithCustomPath = async () => {
+    try {
+      setIsBackupLoading(true);
+      setBackupStatus({ type: 'info', message: 'اختر مكان حفظ النسخة الاحتياطية...' });
+
+      const pathResult = await window.electronAPI.chooseBackupPath();
+      
+      if (pathResult.canceled) {
+        setBackupStatus({ type: null, message: null });
+        return;
+      }
+      
+      if (pathResult.error) {
+        setBackupStatus({ type: 'error', message: `خطأ في اختيار المسار: ${pathResult.error}` });
+        return;
+      }
+
+      setBackupStatus({ type: 'info', message: 'جاري إنشاء نسخة احتياطية...' });
+
+      const result = await window.electronAPI.backupDatabaseEnhanced({
+        customPath: pathResult.filePath
+      });
+      
+      if (result.error) {
+        setBackupStatus({ type: 'error', message: `فشل النسخ الاحتياطي: ${result.error}` });
+      } else {
+        setBackupStatus({ 
+          type: 'success', 
+          message: `تم إنشاء نسخة احتياطية بنجاح في: ${result.path}` 
+        });
+      }
+    } catch (error) {
+      console.error('Error creating custom backup:', error);
+      setBackupStatus({ type: 'error', message: `حدث خطأ غير متوقع: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    } finally {
+      setIsBackupLoading(false);
+    }
+  };
+
+  const createBackupToDrive = async () => {
+    try {
+      if (!driveConnected) {
+        alert('يرجى ربط حساب Google Drive أولاً');
+        return;
+      }
+
+      setIsBackupLoading(true);
+      setBackupStatus({ type: 'info', message: 'جاري إنشاء نسخة احتياطية ورفعها إلى Google Drive...' });
+
+      const result = await window.electronAPI.backupDatabaseEnhanced({
+        uploadToDrive: true,
+        driveCredentials: {
+          // هنا يجب إضافة بيانات الاعتماد الفعلية
+          client_id: 'your_client_id',
+          client_secret: 'your_client_secret',
+          refresh_token: 'your_refresh_token'
+        }
+      });
+      
+      if (result.error) {
+        setBackupStatus({ type: 'error', message: `فشل النسخ الاحتياطي: ${result.error}` });
+      } else {
+        let message = `تم إنشاء نسخة احتياطية بنجاح في: ${result.path}`;
+        if (result.driveFileId) {
+          message += `\nتم رفعها إلى Google Drive بنجاح`;
+        }
+        setBackupStatus({ 
+          type: 'success', 
+          message: message
+        });
+      }
+    } catch (error) {
+      console.error('Error creating Drive backup:', error);
+      setBackupStatus({ type: 'error', message: `حدث خطأ غير متوقع: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    } finally {
+      setIsBackupLoading(false);
+    }
+  };
+
+  const connectGoogleDrive = async () => {
+    try {
+      const result = await window.electronAPI.googleDriveAuth();
+      
+      if (result.success && result.authUrl) {
+        // فتح رابط المصادقة في المتصفح
+        window.open(result.authUrl, '_blank');
+        
+        // في التطبيق الحقيقي، يجب التعامل مع رد المصادقة
+        // للبساطة، سنعتبر أن المستخدم تم ربطه
+        setDriveConnected(true);
+        setBackupStatus({ 
+          type: 'success', 
+          message: 'تم ربط Google Drive بنجاح (محاكاة)' 
+        });
+      }
+    } catch (error) {
+      console.error('Error connecting Google Drive:', error);
+      setBackupStatus({ type: 'error', message: 'فشل في ربط Google Drive' });
+    }
+  };
+
+  const setupAutoBackup = async () => {
+    try {
+      const result = await window.electronAPI.setupAutoBackup(autoBackupSchedule);
+      
+      if (result.success) {
+        setBackupStatus({ 
+          type: 'success', 
+          message: `تم إعداد النسخ الاحتياطي التلقائي: ${autoBackupSchedule}` 
+        });
+      } else {
+        setBackupStatus({ type: 'error', message: result.error || 'فشل في إعداد النسخ التلقائي' });
+      }
+    } catch (error) {
+      console.error('Error setting up auto backup:', error);
+      setBackupStatus({ type: 'error', message: 'حدث خطأ في إعداد النسخ التلقائي' });
     }
   };
 
@@ -547,6 +668,15 @@ const SettingsPage: React.FC = () => {
                   </button>
                   
                   <button
+                    onClick={createBackupWithCustomPath}
+                    disabled={isBackupLoading}
+                    className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                  >
+                    <FolderOpen className="ml-2" size={18} />
+                    اختيار مسار الحفظ
+                  </button>
+                  
+                  <button
                     onClick={restoreBackup}
                     disabled={isBackupLoading}
                     className="flex items-center justify-center bg-amber-600 hover:bg-amber-700 text-white py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
@@ -554,7 +684,66 @@ const SettingsPage: React.FC = () => {
                     <Download className="ml-2" size={18} />
                     استعادة من نسخة احتياطية
                   </button>
-                  
+                </div>
+                
+                {/* Google Drive Integration */}
+                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <h3 className="font-semibold mb-3 text-blue-800 arabic-text">ربط Google Drive</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button
+                      onClick={connectGoogleDrive}
+                      disabled={isBackupLoading || driveConnected}
+                      className={`flex items-center justify-center py-2 px-4 rounded-md transition-colors ${
+                        driveConnected 
+                          ? 'bg-green-600 text-white cursor-not-allowed' 
+                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                      } disabled:bg-gray-400`}
+                    >
+                      <Cloud className="ml-2" size={18} />
+                      {driveConnected ? 'مربوط بـ Google Drive' : 'ربط Google Drive'}
+                    </button>
+                    
+                    <button
+                      onClick={createBackupToDrive}
+                      disabled={isBackupLoading || !driveConnected}
+                      className="flex items-center justify-center bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                    >
+                      <Cloud className="ml-2" size={18} />
+                      نسخ احتياطي إلى Drive
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Auto Backup Scheduling */}
+                <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                  <h3 className="font-semibold mb-3 text-purple-800 arabic-text">النسخ الاحتياطي التلقائي</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="form-label-ar arabic-text">جدولة النسخ التلقائي</label>
+                      <select
+                        value={autoBackupSchedule}
+                        onChange={(e) => setAutoBackupSchedule(e.target.value)}
+                        className="form-select-ar"
+                      >
+                        <option value="manual">يدوي فقط</option>
+                        <option value="daily">يومياً (2:00 ص)</option>
+                        <option value="weekly">أسبوعياً (الأحد 2:00 ص)</option>
+                        <option value="monthly">شهرياً (أول الشهر 2:00 ص)</option>
+                      </select>
+                    </div>
+                    
+                    <button
+                      onClick={setupAutoBackup}
+                      disabled={isBackupLoading}
+                      className="flex items-center justify-center bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                    >
+                      <Clock className="ml-2" size={18} />
+                      تطبيق الجدولة
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-1 gap-4 mb-6">
                   <button
                     onClick={repairDatabase}
                     disabled={isBackupLoading}
