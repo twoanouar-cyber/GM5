@@ -45,6 +45,14 @@ interface Window {
     }>;
     // Database management
     backupDatabase: () => Promise<{ success: boolean; path?: string; error?: string; }>;
+    backupDatabaseEnhanced: (options?: {
+      customPath?: string;
+      uploadToDrive?: boolean;
+      driveCredentials?: any;
+    }) => Promise<{ success: boolean; path?: string; driveFileId?: string; error?: string; }>;
+    chooseBackupPath: () => Promise<{ success?: boolean; filePath?: string; canceled?: boolean; error?: string; }>;
+    setupAutoBackup: (schedule: string, driveCredentials?: any) => Promise<{ success: boolean; error?: string; }>;
+    googleDriveAuth: () => Promise<{ success: boolean; authUrl?: string; error?: string; }>;
     restoreDatabase: () => Promise<{ success: boolean; needRestart?: boolean; canceled?: boolean; error?: string; }>;
     repairDatabase: () => Promise<{ success: boolean; error?: string; }>;
     // Debug
